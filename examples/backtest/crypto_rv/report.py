@@ -78,6 +78,11 @@ def main() -> None:
         )
 
     primary_variant = next(payload for payload in variant_payloads if payload["variant_name"] == "primary")
+    lane_manifest_paths: list[str] = []
+    for item, payload in zip(index["variants"], variant_payloads, strict=False):
+        lane_manifest_path = item.get("lane_manifest_path") or payload.get("lane_manifest_path")
+        if lane_manifest_path is not None:
+            lane_manifest_paths.append(str(lane_manifest_path))
     report_payload = {
         "research_name": config.research_name,
         "snapshot_path": str(snapshot_path),
@@ -99,12 +104,26 @@ def main() -> None:
             "mode": prepared_catalog.mode,
             "classification": prepared_catalog.classification,
         },
+        "artifact_contract_summary": {
+            "lane_manifests": lane_manifest_paths,
+            "required_variant_artifacts": [
+                "lane_manifest.json",
+                "feature_panel_manifest.json",
+                "feature_panel.parquet",
+                "signal_panel.parquet",
+                "signal_metrics.json",
+                "portfolio_metrics.json",
+                "portfolio_timeseries.parquet",
+                "summary_report.md",
+            ],
+        },
         "variant_rows": variant_rows,
         "evidence_vs_inference": {
             "evidence": [
                 "Frozen point-in-time universe snapshot",
                 "Prepared catalog artifact with staged inputs",
                 "BacktestNode-compatible run request JSONs",
+                "Per-variant lane manifests and downstream machine-artifact placeholders",
             ],
             "inference": [
                 "PnL, drawdown, fee, slippage, and funding decomposition remain placeholders until a "
@@ -141,7 +160,7 @@ def main() -> None:
             "",
             "## Evidence vs Inference",
             "",
-            "- Evidence: frozen snapshot, prepared catalog artifact, and BacktestNode-compatible run requests.",
+            "- Evidence: frozen snapshot, prepared catalog artifact, run requests, and per-variant lane manifests.",
             "- Inference: realized PnL and decomposition still require the strategy module and verified "
             "catalog wiring outside this write scope.",
         ],

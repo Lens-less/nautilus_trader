@@ -93,6 +93,25 @@ research artifact, but `run_backtest.py` will stay in `plan-only` mode.
   real backtest.
 - `report.py` currently compiles scaffolding / placeholders until realized result files exist.
 
+## Shared Kernel Contract
+
+The kernel lane now emits a stable machine-readable contract per variant under `output/runs/<variant>/`,
+even in `plan-only` mode. These artifacts are intentionally placeholder-valued until a verified catalog
+and lane-specific signal logic are connected, but the file layout and schemas are fixed for downstream
+lanes:
+
+- `lane_manifest.json`
+- `feature_panel_manifest.json`
+- `feature_panel.parquet`
+- `signal_panel.parquet`
+- `signal_metrics.json`
+- `portfolio_metrics.json`
+- `portfolio_timeseries.parquet`
+- `summary_report.md`
+
+This lets later lanes such as `01-liq-reversal`, `04-conditional`, and `06-combo` depend on a stable
+artifact contract without having to guess output locations or column names.
+
 ## Worktree Workflow
 
 Generated research artifacts under `output/` are local working evidence and are ignored by default

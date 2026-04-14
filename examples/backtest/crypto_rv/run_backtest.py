@@ -5,11 +5,19 @@ import argparse
 import importlib
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 
 try:
+    from .common import format_utc_timestamp
+    from .common import parse_utc_timestamp
+    from .common import stable_payload_hash
+    from .common import write_parquet_records
+    from .schemas import ARTIFACT_SCHEMA_VERSION
+    from .schemas import FeaturePanelManifest
+    from .schemas import LaneArtifactManifest
     from .schemas import LongLegMember
     from .schemas import ResearchConfig
     from .schemas import classify_funding_coverage
@@ -18,7 +26,15 @@ try:
     from .schemas import load_snapshot
     from .schemas import renormalize_long_weights
     from .schemas import save_artifact
+    from .schemas import snapshot_identity
 except ImportError:  # pragma: no cover - script execution fallback
+    from common import format_utc_timestamp
+    from common import parse_utc_timestamp
+    from common import stable_payload_hash
+    from common import write_parquet_records
+    from schemas import ARTIFACT_SCHEMA_VERSION
+    from schemas import FeaturePanelManifest
+    from schemas import LaneArtifactManifest
     from schemas import LongLegMember
     from schemas import ResearchConfig
     from schemas import classify_funding_coverage
@@ -27,6 +43,7 @@ except ImportError:  # pragma: no cover - script execution fallback
     from schemas import load_snapshot
     from schemas import renormalize_long_weights
     from schemas import save_artifact
+    from schemas import snapshot_identity
 
 from nautilus_trader.backtest.config import BacktestDataConfig
 from nautilus_trader.backtest.config import BacktestEngineConfig
@@ -49,6 +66,46 @@ class VariantSpec:
     funding_coverage_ratio: float
     classification: str
     reasons: list[str]
+
+
+FEATURE_COLUMNS = [
+    "ts",
+    "instrument_id",
+    "raw_symbol",
+    "leg",
+    "target_weight",
+    "funding_coverage_ratio",
+    "frozen_rank",
+    "selected",
+    "eligible",
+    "placeholder",
+]
+
+SIGNAL_COLUMNS = [
+    "ts",
+    "instrument_id",
+    "raw_symbol",
+    "leg",
+    "score",
+    "rank",
+    "selected",
+    "eligible",
+    "target_weight",
+    "placeholder",
+]
+
+PORTFOLIO_TIMESERIES_COLUMNS = [
+    "ts",
+    "gross_return",
+    "net_return",
+    "long_return",
+    "short_return",
+    "turnover",
+    "gross_exposure",
+    "net_exposure",
+    "active_names",
+    "placeholder",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -371,6 +428,253 @@ def build_backtest_request(
     return run_config, request_payload
 
 
+def build_feature_panel_rows(
+    *,
+    config: ResearchConfig,
+    snapshot,
+    variant: VariantSpec,
+) -> list[dict[str, Any]]:
+    ts = config.formation_ts
+    candidate_by_instrument = {candidate.instrument_id: candidate for candidate in snapshot.candidates}
+    rows: list[dict[str, Any]] = []
+
+    for member in variant.long_leg:
+        rows.append(
+            {
+                "ts": ts,
+                "instrument_id": member.instrument_id,
+                "raw_symbol": member.raw_symbol,
+                "leg": "long",
+                "target_weight": member.weight,
+                "funding_coverage_ratio": 1.0,
+                "frozen_rank": None,
+                "selected": True,
+                "eligible": True,
+                "placeholder": True,
+            },
+        )
+
+    for item in variant.short_leg:
+        candidate = candidate_by_instrument[item["instrument_id"]]
+        rows.append(
+            {
+                "ts": ts,
+                "instrument_id": item["instrument_id"],
+                "raw_symbol": item["raw_symbol"],
+                "leg": "short",
+                "target_weight": -float(item["weight"]),
+                "funding_coverage_ratio": float(item["funding_coverage_ratio"]),
+                "frozen_rank": candidate.frozen_rank,
+                "selected": candidate.selected,
+                "eligible": candidate.eligible,
+                "placeholder": True,
+            },
+        )
+
+    return rows
+
+
+def build_signal_panel_rows(feature_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    long_rank = 0
+    short_rank = 0
+    for row in feature_rows:
+        if row["leg"] == "long":
+            long_rank += 1
+            rank = long_rank
+            score = float(row["target_weight"])
+        else:
+            short_rank += 1
+            rank = short_rank
+            score = -float(row["funding_coverage_ratio"])
+        rows.append(
+            {
+                "ts": row["ts"],
+                "instrument_id": row["instrument_id"],
+                "raw_symbol": row["raw_symbol"],
+                "leg": row["leg"],
+                "score": score,
+                "rank": rank,
+                "selected": row["selected"],
+                "eligible": row["eligible"],
+                "target_weight": row["target_weight"],
+                "placeholder": True,
+            },
+        )
+    return rows
+
+
+def build_portfolio_timeseries_rows(
+    *,
+    config: ResearchConfig,
+    variant: VariantSpec,
+) -> list[dict[str, Any]]:
+    start = parse_utc_timestamp(config.test_window_start)
+    end = parse_utc_timestamp(config.test_window_end)
+    total_names = len(variant.long_leg) + len(variant.short_leg)
+    rows: list[dict[str, Any]] = []
+    current = start
+    while current <= end:
+        rows.append(
+            {
+                "ts": format_utc_timestamp(current),
+                "gross_return": 0.0,
+                "net_return": 0.0,
+                "long_return": 0.0,
+                "short_return": 0.0,
+                "turnover": 0.0,
+                "gross_exposure": 1.0,
+                "net_exposure": 0.0,
+                "active_names": total_names,
+                "placeholder": True,
+            },
+        )
+        current += timedelta(days=1)
+    return rows
+
+
+def write_downstream_artifacts(
+    *,
+    config: ResearchConfig,
+    snapshot,
+    prepared_catalog,
+    snapshot_path: Path,
+    prepared_catalog_path: Path,
+    variant: VariantSpec,
+    variant_dir: Path,
+    request_path: Path,
+    result_path: Path,
+    status: str,
+) -> dict[str, str]:
+    feature_rows = build_feature_panel_rows(config=config, snapshot=snapshot, variant=variant)
+    signal_rows = build_signal_panel_rows(feature_rows)
+    portfolio_timeseries_rows = build_portfolio_timeseries_rows(config=config, variant=variant)
+
+    feature_panel_path = variant_dir / "feature_panel.parquet"
+    signal_panel_path = variant_dir / "signal_panel.parquet"
+    portfolio_timeseries_path = variant_dir / "portfolio_timeseries.parquet"
+    feature_panel_manifest_path = variant_dir / "feature_panel_manifest.json"
+    signal_metrics_path = variant_dir / "signal_metrics.json"
+    portfolio_metrics_path = variant_dir / "portfolio_metrics.json"
+    summary_report_path = variant_dir / "summary_report.md"
+    lane_manifest_path = variant_dir / "lane_manifest.json"
+
+    write_parquet_records(feature_panel_path, feature_rows)
+    write_parquet_records(signal_panel_path, signal_rows)
+    write_parquet_records(portfolio_timeseries_path, portfolio_timeseries_rows)
+
+    feature_manifest = FeaturePanelManifest(
+        schema_version=ARTIFACT_SCHEMA_VERSION,
+        variant_name=variant.name,
+        placeholder=True,
+        feature_schema_version=ARTIFACT_SCHEMA_VERSION,
+        feature_columns=FEATURE_COLUMNS,
+        date_range={"start": config.formation_ts, "end": config.formation_ts},
+        instrument_count=len(feature_rows),
+        row_count=len(feature_rows),
+        artifact_path=str(feature_panel_path),
+        feature_panel_path=str(feature_panel_path),
+        signal_artifact_path=str(signal_panel_path),
+        signal_panel_path=str(signal_panel_path),
+    )
+    save_artifact(feature_panel_manifest_path, feature_manifest.to_dict())
+
+    snapshot_id = snapshot_identity(snapshot)
+    config_hash = stable_payload_hash(config.to_dict())[:12]
+    signal_metrics_payload = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "variant_name": variant.name,
+        "snapshot_id": snapshot_id,
+        "config_hash": config_hash,
+        "mode": "plan-only",
+        "placeholder": True,
+        "row_count": len(signal_rows),
+        "long_count": len([row for row in signal_rows if row["leg"] == "long"]),
+        "short_count": len([row for row in signal_rows if row["leg"] == "short"]),
+        "feature_columns": FEATURE_COLUMNS,
+        "signal_columns": SIGNAL_COLUMNS,
+    }
+    save_artifact(signal_metrics_path, signal_metrics_payload)
+
+    portfolio_metrics_payload = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "variant_name": variant.name,
+        "snapshot_id": snapshot_id,
+        "config_hash": config_hash,
+        "mode": "plan-only",
+        "placeholder": True,
+        "classification": variant.classification,
+        "funding_coverage_ratio": variant.funding_coverage_ratio,
+        "active_names": len(variant.long_leg) + len(variant.short_leg),
+        "timeseries_columns": PORTFOLIO_TIMESERIES_COLUMNS,
+        "notes": [
+            "Kernel contract placeholder output.",
+            "Realized portfolio metrics are deferred until a verified catalog and lane-specific signal logic are connected.",
+        ],
+    }
+    save_artifact(portfolio_metrics_path, portfolio_metrics_payload)
+
+    summary_lines = [
+        f"# {variant.name}",
+        "",
+        "## Contract Status",
+        "",
+        f"- Mode: `plan-only`",
+        f"- Status: `{status}`",
+        f"- Classification: `{variant.classification}`",
+        f"- Snapshot ID: `{snapshot_id}`",
+        f"- Config hash: `{config_hash}`",
+        "",
+        "## Machine Artifacts",
+        "",
+        f"- Feature panel: `{feature_panel_path.name}`",
+        f"- Signal panel: `{signal_panel_path.name}`",
+        f"- Portfolio timeseries: `{portfolio_timeseries_path.name}`",
+        "",
+        "## Notes",
+        "",
+        "- This is a kernel placeholder artifact set intended to freeze downstream schemas.",
+        "- Realized signal and portfolio values will be produced by later alpha lanes.",
+    ]
+    summary_report_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+
+    lane_manifest = LaneArtifactManifest(
+        schema_version=ARTIFACT_SCHEMA_VERSION,
+        research_name=config.research_name,
+        variant_name=variant.name,
+        mode="plan-only",
+        status=status,
+        placeholder=True,
+        snapshot_id=snapshot_id,
+        config_hash=config_hash,
+        snapshot_path=str(snapshot_path),
+        prepared_catalog_path=str(prepared_catalog_path),
+        run_request_path=str(request_path),
+        result_path=str(result_path),
+        feature_panel_manifest_path=str(feature_panel_manifest_path),
+        feature_panel_path=str(feature_panel_path),
+        signal_panel_path=str(signal_panel_path),
+        signal_metrics_path=str(signal_metrics_path),
+        portfolio_metrics_path=str(portfolio_metrics_path),
+        portfolio_timeseries_path=str(portfolio_timeseries_path),
+        summary_report_path=str(summary_report_path),
+    )
+    lane_manifest.validate()
+    save_artifact(lane_manifest_path, lane_manifest.to_dict())
+    return {
+        "lane_manifest_path": str(lane_manifest_path),
+        "feature_panel_manifest_path": str(feature_panel_manifest_path),
+        "feature_panel_path": str(feature_panel_path),
+        "signal_panel_path": str(signal_panel_path),
+        "signal_metrics_path": str(signal_metrics_path),
+        "portfolio_metrics_path": str(portfolio_metrics_path),
+        "portfolio_timeseries_path": str(portfolio_timeseries_path),
+        "summary_report_path": str(summary_report_path),
+        "snapshot_id": snapshot_id,
+        "config_hash": config_hash,
+    }
+
+
 def main() -> None:
     args = build_parser().parse_args()
     config_path = Path(args.config).resolve()
@@ -461,11 +765,27 @@ def main() -> None:
         result_path = variant_dir / "result.json"
         save_artifact(result_path, result_payload)
 
+        artifact_paths = write_downstream_artifacts(
+            config=config,
+            snapshot=snapshot,
+            prepared_catalog=prepared_catalog,
+            snapshot_path=snapshot_path,
+            prepared_catalog_path=prepared_catalog_path,
+            variant=variant,
+            variant_dir=variant_dir,
+            request_path=request_path,
+            result_path=result_path,
+            status=status,
+        )
+        result_payload["artifact_paths"] = artifact_paths
+        save_artifact(result_path, result_payload)
+
         index_payload["variants"].append(
             {
                 "variant_name": variant.name,
                 "result_path": str(result_path),
                 "request_path": str(request_path),
+                "lane_manifest_path": artifact_paths["lane_manifest_path"],
                 "status": status,
                 "classification": variant.classification,
             },

@@ -16,6 +16,7 @@ try:
     from .common import parse_optional_int
     from .common import parse_utc_timestamp
     from .common import resolve_path
+    from .common import stable_payload_hash
     from .common import within_ratio
     from .common import write_json
 except ImportError:  # pragma: no cover - script execution fallback
@@ -27,11 +28,13 @@ except ImportError:  # pragma: no cover - script execution fallback
     from common import parse_optional_int
     from common import parse_utc_timestamp
     from common import resolve_path
+    from common import stable_payload_hash
     from common import within_ratio
     from common import write_json
 
 
 SCHEMA_VERSION = "1.0"
+ARTIFACT_SCHEMA_VERSION = "1.0"
 
 
 def classify_funding_coverage(
@@ -616,6 +619,88 @@ class PreparedCatalogArtifact:
         }
 
 
+@dataclass(slots=True)
+class FeaturePanelManifest:
+    schema_version: str
+    variant_name: str
+    placeholder: bool
+    feature_schema_version: str
+    feature_columns: list[str]
+    date_range: dict[str, str]
+    instrument_count: int
+    row_count: int
+    artifact_path: str
+    feature_panel_path: str
+    signal_artifact_path: str
+    signal_panel_path: str
+
+    def validate(self) -> None:
+        if not self.feature_columns:
+            raise ValueError("feature_columns must not be empty")
+        if self.instrument_count <= 0:
+            raise ValueError("instrument_count must be positive")
+        if self.row_count <= 0:
+            raise ValueError("row_count must be positive")
+        if not self.artifact_path:
+            raise ValueError("artifact_path must not be empty")
+        if not self.feature_panel_path:
+            raise ValueError("feature_panel_path must not be empty")
+        if not self.signal_artifact_path:
+            raise ValueError("signal_artifact_path must not be empty")
+        if not self.signal_panel_path:
+            raise ValueError("signal_panel_path must not be empty")
+        if {"start", "end"} - set(self.date_range):
+            raise ValueError("date_range must contain start and end")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class LaneArtifactManifest:
+    schema_version: str
+    research_name: str
+    variant_name: str
+    mode: str
+    status: str
+    placeholder: bool
+    snapshot_id: str
+    config_hash: str
+    snapshot_path: str
+    prepared_catalog_path: str
+    run_request_path: str
+    result_path: str
+    feature_panel_manifest_path: str
+    feature_panel_path: str
+    signal_panel_path: str
+    signal_metrics_path: str
+    portfolio_metrics_path: str
+    portfolio_timeseries_path: str
+    summary_report_path: str
+
+    def validate(self) -> None:
+        required = (
+            self.snapshot_id,
+            self.config_hash,
+            self.snapshot_path,
+            self.prepared_catalog_path,
+            self.run_request_path,
+            self.result_path,
+            self.feature_panel_manifest_path,
+            self.feature_panel_path,
+            self.signal_panel_path,
+            self.signal_metrics_path,
+            self.portfolio_metrics_path,
+            self.portfolio_timeseries_path,
+            self.summary_report_path,
+        )
+        if any(not value for value in required):
+            raise ValueError("LaneArtifactManifest contains empty required paths or identifiers")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def load_research_config(path: Path) -> ResearchConfig:
     config = ResearchConfig.from_dict(load_json(path))
     config.validate()
@@ -682,6 +767,53 @@ def load_prepared_catalog(path: Path) -> PreparedCatalogArtifact:
     )
 
 
+def load_feature_panel_manifest(path: Path) -> FeaturePanelManifest:
+    payload = load_json(path)
+    manifest = FeaturePanelManifest(
+        schema_version=str(payload["schema_version"]),
+        variant_name=str(payload["variant_name"]),
+        placeholder=bool(payload["placeholder"]),
+        feature_schema_version=str(payload["feature_schema_version"]),
+        feature_columns=list(payload["feature_columns"]),
+        date_range=dict(payload["date_range"]),
+        instrument_count=int(payload["instrument_count"]),
+        row_count=int(payload["row_count"]),
+        artifact_path=str(payload.get("artifact_path") or payload["feature_panel_path"]),
+        feature_panel_path=str(payload.get("feature_panel_path") or payload["artifact_path"]),
+        signal_artifact_path=str(payload.get("signal_artifact_path") or payload["signal_panel_path"]),
+        signal_panel_path=str(payload.get("signal_panel_path") or payload["signal_artifact_path"]),
+    )
+    manifest.validate()
+    return manifest
+
+
+def load_lane_artifact_manifest(path: Path) -> LaneArtifactManifest:
+    payload = load_json(path)
+    manifest = LaneArtifactManifest(
+        schema_version=str(payload["schema_version"]),
+        research_name=str(payload["research_name"]),
+        variant_name=str(payload["variant_name"]),
+        mode=str(payload["mode"]),
+        status=str(payload["status"]),
+        placeholder=bool(payload["placeholder"]),
+        snapshot_id=str(payload["snapshot_id"]),
+        config_hash=str(payload["config_hash"]),
+        snapshot_path=str(payload["snapshot_path"]),
+        prepared_catalog_path=str(payload["prepared_catalog_path"]),
+        run_request_path=str(payload["run_request_path"]),
+        result_path=str(payload["result_path"]),
+        feature_panel_manifest_path=str(payload["feature_panel_manifest_path"]),
+        feature_panel_path=str(payload["feature_panel_path"]),
+        signal_panel_path=str(payload["signal_panel_path"]),
+        signal_metrics_path=str(payload["signal_metrics_path"]),
+        portfolio_metrics_path=str(payload["portfolio_metrics_path"]),
+        portfolio_timeseries_path=str(payload["portfolio_timeseries_path"]),
+        summary_report_path=str(payload["summary_report_path"]),
+    )
+    manifest.validate()
+    return manifest
+
+
 def frozen_rank_key(candidate: UniverseCandidate) -> tuple[int, int, float, float, int, str]:
     return (
         0 if candidate.frozen_rank is not None else 1,
@@ -695,3 +827,7 @@ def frozen_rank_key(candidate: UniverseCandidate) -> tuple[int, int, float, floa
 
 def save_artifact(path: Path, payload: dict[str, Any]) -> None:
     write_json(path, payload)
+
+
+def snapshot_identity(snapshot: UniverseSnapshot) -> str:
+    return stable_payload_hash(snapshot.to_dict())[:12]

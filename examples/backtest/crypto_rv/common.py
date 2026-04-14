@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from datetime import UTC
 from datetime import datetime
@@ -53,6 +54,19 @@ def write_json(path: Path, payload: Any) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=False)
         handle.write("\n")
+
+
+def stable_payload_hash(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def write_parquet_records(path: Path, records: list[dict[str, Any]]) -> None:
+    import pandas as pd
+
+    ensure_directory(path.parent)
+    frame = pd.DataFrame.from_records(records)
+    frame.to_parquet(path, index=False)
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
@@ -111,4 +125,3 @@ def within_ratio(value: float) -> bool:
 
 def pre_window_cutoff(start_ts: str, days: int) -> str:
     return format_utc_timestamp(parse_utc_timestamp(start_ts) - timedelta(days=days))
-
