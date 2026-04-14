@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "research_name": "crypto-rv-test",
+  "screening_ts": "2026-01-13T00:00:00Z",
+  "test_window_start": "2026-01-14T00:00:00Z",
+  "test_window_end": "2026-04-13T00:00:00Z",
+  "thresholds": {
+    "min_market_cap_usd": 10000000,
+    "max_market_cap_usd": 100000000,
+    "max_volume_24h_usd": 10000000,
+    "pre_window_history_days": 14
+  },
+  "sources": {
+    "market_cap": "synthetic-market-cap",
+    "volume_24h": "synthetic-volume",
+    "instrument_metadata": "synthetic-metadata"
+  },
+  "long_leg_assets": ["BTC", "ETH", "SOL", "BNB", "HYPE"],
+  "selected_short_count": 0,
+  "selected_short_symbols": [],
+  "selected_short_instrument_ids": [],
+  "selected_short_funding_coverage_ratio": 0.0,
+  "funding_coverage_classification": "partial evidence only",
+  "funding_coverage_basis": "equal-weight notional-days assumption across selected shorts",
+  "candidates": []
+}

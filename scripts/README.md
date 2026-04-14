@@ -69,3 +69,29 @@ and downstream tooling can verify the checksum.
 For details on the other helper scripts, run them with `-h` or read the
 inline comments; they are mostly invoked from CI and rarely need manual
 execution.
+
+---
+
+## `crypto_xsec_worktrees.py` – manage the approved crypto cross-sectional worktree layout
+
+`crypto_xsec_worktrees.py` is a small manual helper for the approved
+`crypto_rv` research program. It does not choose strategy logic or create
+commits for you; it only manages the branch/worktree topology from the
+approved plan.
+
+It supports:
+
+- `plan` – print the canonical lane map
+- `init-branches` – ensure `research/crypto-xsec-integration` exists
+- `add <lane>` – create one lane worktree
+- `status` – show which lane branches/worktrees already exist
+
+Typical usage:
+
+```bash
+cd /Users/lens/Desktop/ns-st/nautilus_trader
+uv run python scripts/crypto_xsec_worktrees.py plan
+uv run python scripts/crypto_xsec_worktrees.py init-branches --seed-start-point HEAD
+uv run python scripts/crypto_xsec_worktrees.py add 00-kernel
+uv run python scripts/crypto_xsec_worktrees.py status
+```

@@ -1,0 +1,36 @@
+{
+  "strategy_path": "nautilus_trader.examples.strategies.crypto_rv_basket:CryptoRVBasketStrategy",
+  "config_path": "nautilus_trader.examples.strategies.crypto_rv_basket:CryptoRVBasketConfig",
+  "config": {
+    "long_instrument_ids": [
+      "BTCUSDT-PERP.BINANCE",
+      "ETHUSDT-PERP.BINANCE",
+      "SOLUSDT-PERP.BINANCE",
+      "BNBUSDT-PERP.BINANCE",
+      "HYPEUSDT-PERP.BINANCE"
+    ],
+    "short_instrument_ids": [
+      "ALT01USDT-PERP.BINANCE",
+      "ALT02USDT-PERP.BINANCE",
+      "ALT03USDT-PERP.BINANCE"
+    ],
+    "bar_types": [
+      "BTCUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ETHUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "SOLUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "BNBUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "HYPEUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ALT01USDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ALT02USDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ALT03USDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL"
+    ],
+    "leg_notional_usd": 500000.0,
+    "rebalance_cadence": "weekly",
+    "min_order_notional_usd": 25.0,
+    "long_fee_bps": 4.0,
+    "short_fee_bps": 4.0,
+    "long_slippage_bps": 8.0,
+    "short_slippage_bps": 8.0,
+    "short_borrow_bps_per_day": 0.82
+  }
+}

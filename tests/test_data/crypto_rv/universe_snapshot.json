@@ -1,0 +1,104 @@
+{
+  "formation_ts": "2026-01-01T00:00:00Z",
+  "screening_ts": "2025-12-31T18:00:00Z",
+  "source": {
+    "market_cap": "synthetic_market_cap_v1",
+    "volume_24h": "synthetic_volume_v1"
+  },
+  "thresholds": {
+    "market_cap_min_usdt": 10000000,
+    "market_cap_max_usdt": 100000000,
+    "volume_24h_max_usdt": 10000000,
+    "short_count_target": 20,
+    "short_count_max": 50
+  },
+  "long_basket": ["BTC", "ETH", "SOL", "BNB", "HYPE"],
+  "selected_short_symbols": ["ALP1USDT", "BETAUSDT", "GAMMAUSDT"],
+  "candidates": [
+    {
+      "raw_symbol": "ALP1USDT",
+      "instrument_id": "ALP1USDT-PERP.BINANCE",
+      "listed_at": "2025-09-15T00:00:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2025-09-15T00:00:00Z",
+      "pre_window_history_days": 108,
+      "funding_coverage_ratio": 0.97,
+      "funding_missing": false,
+      "included": true,
+      "exclusion_reason": null,
+      "market_cap_usdt": 42000000,
+      "volume_24h_usdt": 7200000
+    },
+    {
+      "raw_symbol": "BETAUSDT",
+      "instrument_id": "BETAUSDT-PERP.BINANCE",
+      "listed_at": "2025-10-01T00:00:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2025-10-01T00:00:00Z",
+      "pre_window_history_days": 92,
+      "funding_coverage_ratio": 0.82,
+      "funding_missing": false,
+      "included": true,
+      "exclusion_reason": null,
+      "market_cap_usdt": 61000000,
+      "volume_24h_usdt": 4800000
+    },
+    {
+      "raw_symbol": "GAMMAUSDT",
+      "instrument_id": "GAMMAUSDT-PERP.BINANCE",
+      "listed_at": "2025-11-05T00:00:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2025-11-05T00:00:00Z",
+      "pre_window_history_days": 57,
+      "funding_coverage_ratio": 0.76,
+      "funding_missing": false,
+      "included": true,
+      "exclusion_reason": null,
+      "market_cap_usdt": 25500000,
+      "volume_24h_usdt": 3100000
+    },
+    {
+      "raw_symbol": "DELTAUSDT",
+      "instrument_id": "DELTAUSDT-PERP.BINANCE",
+      "listed_at": "2026-01-01T00:01:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2026-01-01T00:01:00Z",
+      "pre_window_history_days": 0,
+      "funding_coverage_ratio": null,
+      "funding_missing": true,
+      "included": false,
+      "exclusion_reason": "listed_after_formation",
+      "market_cap_usdt": 18000000,
+      "volume_24h_usdt": 1200000
+    },
+    {
+      "raw_symbol": "EPSILONUSDT",
+      "instrument_id": "EPSILONUSDT-PERP.BINANCE",
+      "listed_at": "2025-12-20T00:00:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2025-12-20T00:00:00Z",
+      "pre_window_history_days": 12,
+      "funding_coverage_ratio": 0.91,
+      "funding_missing": false,
+      "included": false,
+      "exclusion_reason": "insufficient_prewindow_history",
+      "market_cap_usdt": 53000000,
+      "volume_24h_usdt": 8800000
+    },
+    {
+      "raw_symbol": "ZETAUSDT",
+      "instrument_id": "ZETAUSDT-PERP.BINANCE",
+      "listed_at": "2025-10-10T00:00:00Z",
+      "delisted_at": null,
+      "first_price_ts": "2025-10-10T00:00:00Z",
+      "pre_window_history_days": 83,
+      "funding_coverage_ratio": null,
+      "funding_missing": true,
+      "included": false,
+      "exclusion_reason": "funding_missing",
+      "market_cap_usdt": 68000000,
+      "volume_24h_usdt": 4100000
+    }
+  ],
+  "notes": "Synthetic PIT snapshot fixture for crypto RV contract tests."
+}

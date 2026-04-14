@@ -12,3 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
+
+from nautilus_trader.examples.strategies.crypto_rv_basket import CryptoRVBasket
+from nautilus_trader.examples.strategies.crypto_rv_basket import CryptoRVBasketConfig
+from nautilus_trader.examples.strategies.crypto_rv_basket import CryptoRVBasketStrategy
+
+
+__all__ = ["CryptoRVBasket", "CryptoRVBasketConfig", "CryptoRVBasketStrategy"]

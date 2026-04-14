@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0",
+  "research_name": "crypto-rv-binance-example",
+  "formation_ts": "2026-01-12T00:00:00Z",
+  "test_window_start": "2026-01-13T00:00:00Z",
+  "test_window_end": "2026-04-13T00:00:00Z",
+  "universe_input_path": "screener.example.csv",
+  "history_manifest_path": "history_manifest.example.csv",
+  "snapshot_output_path": "../output/example_snapshot.json",
+  "prepared_catalog_output_path": "../output/example_prepared_catalog.json",
+  "run_output_dir": "../output/runs",
+  "report_output_path": "../output/example_report.json",
+  "long_leg": [
+    {
+      "asset": "BTC",
+      "raw_symbol": "BTCUSDT-PERP",
+      "instrument_id": "BTCUSDT-PERP.BINANCE",
+      "weight": 0.2
+    },
+    {
+      "asset": "ETH",
+      "raw_symbol": "ETHUSDT-PERP",
+      "instrument_id": "ETHUSDT-PERP.BINANCE",
+      "weight": 0.2
+    },
+    {
+      "asset": "SOL",
+      "raw_symbol": "SOLUSDT-PERP",
+      "instrument_id": "SOLUSDT-PERP.BINANCE",
+      "weight": 0.2
+    },
+    {
+      "asset": "BNB",
+      "raw_symbol": "BNBUSDT-PERP",
+      "instrument_id": "BNBUSDT-PERP.BINANCE",
+      "weight": 0.2
+    },
+    {
+      "asset": "HYPE",
+      "raw_symbol": "HYPEUSDT-PERP",
+      "instrument_id": "HYPEUSDT-PERP.BINANCE",
+      "weight": 0.2
+    }
+  ],
+  "thresholds": {
+    "min_market_cap_usd": 10000000,
+    "max_market_cap_usd": 100000000,
+    "max_volume_24h_usd": 10000000,
+    "pre_window_history_days": 14,
+    "min_price_coverage_ratio": 1.0,
+    "funding_partial_evidence_threshold": 0.8,
+    "funding_warning_threshold": 0.95
+  },
+  "cost_models": {
+    "base": {
+      "fee_bps": 4.0,
+      "slippage_bps": 8.0,
+      "short_borrow_bps_annual": 0.0,
+      "notes": "Phase-one research baseline."
+    },
+    "stress": {
+      "fee_bps": 8.0,
+      "slippage_bps": 25.0,
+      "short_borrow_bps_annual": 300.0,
+      "notes": "Stress branch for low-liquidity short basket realism floor."
+    }
+  },
+  "strategy": {
+    "strategy_path": "nautilus_trader.examples.strategies.crypto_rv_basket:CryptoRVBasketStrategy",
+    "config_path": "nautilus_trader.examples.strategies.crypto_rv_basket:CryptoRVBasketConfig",
+    "allow_placeholder_runner": true
+  },
+  "sensitivity": {
+    "enable_hype_out": true,
+    "short_counts": [
+      20,
+      30,
+      50
+    ],
+    "rebalance_cadences": [
+      "weekly",
+      "biweekly"
+    ]
+  },
+  "primary_short_count": 20,
+  "min_short_count": 20,
+  "max_short_count": 50,
+  "rebalance_cadence": "weekly",
+  "neutrality_tolerance_pct": 1.0,
+  "venue": "BINANCE",
+  "base_currency": "USDT"
+}
