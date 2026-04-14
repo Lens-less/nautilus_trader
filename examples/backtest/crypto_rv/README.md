@@ -117,6 +117,10 @@ uv run python scripts/crypto_xsec_worktrees.py add 00-kernel
 uv run python scripts/crypto_xsec_worktrees.py status
 ```
 
+The helper auto-detects the shared `worktrees/` root both from the seed repo and from an active
+lane worktree. You only need `--worktrees-root` if you intentionally keep lane worktrees
+somewhere else.
+
 The intended execution order remains:
 
 1. `00-kernel`

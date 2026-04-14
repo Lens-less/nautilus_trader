@@ -93,6 +93,12 @@ def resolve_repo_root(path: Path) -> Path:
     return Path(result.stdout.strip())
 
 
+def default_worktrees_root(repo_root: Path) -> Path:
+    if repo_root.parent.name == "worktrees":
+        return repo_root.parent
+    return repo_root.parent / "worktrees"
+
+
 def lane_by_key(key: str) -> LaneSpec:
     for lane in LANES:
         if lane.key == key:
@@ -175,8 +181,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--worktrees-root",
-        default="../worktrees",
-        help="Directory where lane worktrees should be created.",
+        default=None,
+        help="Directory where lane worktrees should be created. Defaults to the shared sibling worktrees directory.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -208,7 +214,11 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = resolve_repo_root(Path(args.repo_root).resolve())
-    worktrees_root = Path(args.worktrees_root).resolve()
+    worktrees_root = (
+        Path(args.worktrees_root).resolve()
+        if args.worktrees_root is not None
+        else default_worktrees_root(repo_root).resolve()
+    )
 
     if args.command == "plan":
         print_plan()

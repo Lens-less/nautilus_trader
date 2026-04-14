@@ -95,3 +95,8 @@ uv run python scripts/crypto_xsec_worktrees.py init-branches --seed-start-point 
 uv run python scripts/crypto_xsec_worktrees.py add 00-kernel
 uv run python scripts/crypto_xsec_worktrees.py status
 ```
+
+The helper auto-detects the shared `worktrees/` directory when run either from
+the seed repo root or from an existing lane worktree. Override
+`--worktrees-root` only when your local layout is different from the approved
+default.
