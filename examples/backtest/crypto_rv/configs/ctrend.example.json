@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "research_name": "crypto-ctrend-example",
+  "snapshot_path": "../output/example_snapshot.json",
+  "prepared_catalog_path": "../output/example_prepared_catalog.json",
+  "output_dir": "../output/ctrend_runs",
+  "report_output_path": "../output/ctrend_report.json",
+  "baseline_long_instrument_ids": [
+    "BTCUSDT-PERP.BINANCE",
+    "ETHUSDT-PERP.BINANCE",
+    "SOLUSDT-PERP.BINANCE",
+    "BNBUSDT-PERP.BINANCE",
+    "HYPEUSDT-PERP.BINANCE"
+  ],
+  "strategy": {
+    "strategy_path": "nautilus_trader.examples.strategies.crypto_xsec_trend:CryptoXSecTrendStrategy",
+    "config_path": "nautilus_trader.examples.strategies.crypto_xsec_trend:CryptoXSecTrendConfig",
+    "allow_placeholder_runner": true
+  },
+  "signal": {
+    "fast_window": 2,
+    "slow_window": 4,
+    "sma_window": 4,
+    "vol_window": 4,
+    "volume_window": 2,
+    "min_history_bars": 5
+  },
+  "portfolio": {
+    "leg_notional_usd": 500000.0,
+    "long_bucket_frac": 0.2,
+    "short_bucket_frac": 0.2,
+    "rebalance_cadence": "weekly",
+    "min_order_notional_usd": 25.0
+  },
+  "cost_models": {
+    "base": {
+      "fee_bps": 4.0,
+      "slippage_bps": 8.0,
+      "short_borrow_bps_annual": 0.0,
+      "notes": "Phase-one CTREND baseline."
+    },
+    "stress": {
+      "fee_bps": 8.0,
+      "slippage_bps": 25.0,
+      "short_borrow_bps_annual": 300.0,
+      "notes": "Stress branch for CTREND."
+    }
+  }
+}

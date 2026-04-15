@@ -1,0 +1,35 @@
+{
+  "strategy_path": "nautilus_trader.examples.strategies.crypto_xsec_trend:CryptoXSecTrendStrategy",
+  "config_path": "nautilus_trader.examples.strategies.crypto_xsec_trend:CryptoXSecTrendConfig",
+  "config": {
+    "universe_instrument_ids": [
+      "BTCUSDT-PERP.BINANCE",
+      "ETHUSDT-PERP.BINANCE",
+      "ALT01USDT-PERP.BINANCE",
+      "ALT02USDT-PERP.BINANCE"
+    ],
+    "bar_types": [
+      "BTCUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ETHUSDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ALT01USDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL",
+      "ALT02USDT-PERP.BINANCE-60-MINUTE-LAST-EXTERNAL"
+    ],
+    "leg_notional_usd": 1000.0,
+    "rebalance_cadence": "weekly",
+    "long_bucket_frac": 0.25,
+    "short_bucket_frac": 0.25,
+    "fast_window": 2,
+    "slow_window": 4,
+    "sma_window": 4,
+    "vol_window": 4,
+    "volume_window": 2,
+    "min_history_bars": 5,
+    "volatility_managed": true,
+    "min_order_notional_usd": 25.0,
+    "long_fee_bps": 4.0,
+    "short_fee_bps": 4.0,
+    "long_slippage_bps": 8.0,
+    "short_slippage_bps": 8.0,
+    "short_borrow_bps_per_day": 0.0
+  }
+}

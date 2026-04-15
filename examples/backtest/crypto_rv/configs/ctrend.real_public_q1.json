@@ -1,0 +1,35 @@
+{
+  "research_root": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1",
+  "selected_universe_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/selected_universe.json",
+  "catalog_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/followups/catalog/catalog_50",
+  "baseline_metrics_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/real_backtest_metrics.json",
+  "top_n_candidates": 50,
+  "output_json": "../output/real_public_2026q1/ctrend_q1_report.json",
+  "output_md": "../output/real_public_2026q1/ctrend_q1_report.md",
+  "signal": {
+    "fast_window": 7,
+    "slow_window": 21,
+    "sma_window": 21,
+    "vol_window": 20,
+    "volume_window": 5,
+    "min_history_bars": 25
+  },
+  "portfolio": {
+    "leg_notional_usd": 500000.0,
+    "long_bucket_frac": 0.2,
+    "short_bucket_frac": 0.2,
+    "rebalance_cadence": "weekly"
+  },
+  "cost_models": {
+    "base": {
+      "fee_bps": 4.0,
+      "slippage_bps": 8.0,
+      "short_borrow_bps_annual": 0.0
+    },
+    "stress": {
+      "fee_bps": 8.0,
+      "slippage_bps": 25.0,
+      "short_borrow_bps_annual": 300.0
+    }
+  }
+}

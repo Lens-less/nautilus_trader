@@ -23,8 +23,14 @@ Nautilus catalog is available.
 - `run_backtest.py`: builds `ImportableStrategyConfig` + `BacktestRunConfig` requests for the
   baseline and required sensitivities; optionally executes if a real strategy import and catalog
   exist
+- `run_ctrend_backtest.py`: runs the CTREND cross-sectional trend lane and emits machine-readable
+  artifacts plus an offline baseline comparison
 - `report.py`: compiles a research summary from generated run outputs
+- `report_ctrend.py`: compiles the CTREND lane summary and replacement verdict
 - `schemas.py`: config / snapshot / prepared-catalog dataclasses and validation
+- `ctrend_schemas.py`: CTREND-specific config schema so the old RV contract stays untouched
+- `signals/vol_managed_trend.py`: pure-Python CTREND v1 signal logic shared by the lane runner and
+  the importable strategy container
 - `configs/`: example config, sample screening input, and sample history manifest
 
 ## Quick Start
@@ -44,6 +50,13 @@ uv run python examples/backtest/crypto_rv/run_backtest.py \
 
 uv run python examples/backtest/crypto_rv/report.py \
   --config examples/backtest/crypto_rv/configs/research.example.json
+
+# Reuse the same snapshot/catalog artifacts for the CTREND lane.
+uv run python examples/backtest/crypto_rv/run_ctrend_backtest.py \
+  --config examples/backtest/crypto_rv/configs/ctrend.example.json
+
+uv run python examples/backtest/crypto_rv/report_ctrend.py \
+  --config examples/backtest/crypto_rv/configs/ctrend.example.json
 ```
 
 ## External Input Contracts
@@ -92,6 +105,15 @@ research artifact, but `run_backtest.py` will stay in `plan-only` mode.
 - A verified Nautilus `ParquetDataCatalog` still has to be connected before `--execute` can run a
   real backtest.
 - `report.py` currently compiles scaffolding / placeholders until realized result files exist.
+- `run_ctrend_backtest.py` currently computes research-grade offline portfolio metrics from the
+  staged price paths so the lane can be compared before full engine execution is wired.
+
+## RV Baseline vs CTREND Lane
+
+- `run_backtest.py` + `CryptoRVBasketStrategy` remain the preserved fixed-basket RV baseline.
+- `run_ctrend_backtest.py` + `CryptoXSecTrendStrategy` are the new CTREND mainline candidate.
+- The CTREND replacement rule is only positive when net return is higher than baseline and max
+  drawdown is not worse.
 
 ## Shared Kernel Contract
 
