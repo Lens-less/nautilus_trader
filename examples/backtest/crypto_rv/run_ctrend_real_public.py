@@ -61,10 +61,20 @@ def build_parser() -> argparse.ArgumentParser:
 def load_config(path: Path) -> RealPublicConfig:
     payload = load_json(path)
     base_dir = path.parent
+    repo_root = Path(__file__).resolve().parents[3]
 
     def _resolve(value: str) -> Path:
         candidate = Path(value)
-        return candidate if candidate.is_absolute() else (base_dir / candidate).resolve()
+        if not candidate.is_absolute():
+            return (base_dir / candidate).resolve()
+        if candidate.exists():
+            return candidate
+        if "examples" in candidate.parts:
+            suffix = Path(*candidate.parts[candidate.parts.index("examples") :])
+            fallback = (repo_root / suffix).resolve()
+            if fallback.exists():
+                return fallback
+        return candidate
 
     return RealPublicConfig(
         research_root=_resolve(payload["research_root"]),

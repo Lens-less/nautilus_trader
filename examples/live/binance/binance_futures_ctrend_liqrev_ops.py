@@ -374,8 +374,11 @@ async def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "steps": [],
     }
 
-    await account_api.set_futures_hedge_mode(False)
-    result["steps"].append("set hedge mode -> one_way")
+    try:
+        await account_api.set_futures_hedge_mode(False)
+        result["steps"].append("set hedge mode -> one_way")
+    except Exception as exc:  # pragma: no cover - exchange may report already-set state
+        result["steps"].append(f"hedge mode unchanged ({exc})")
 
     for symbol in symbols:
         await account_api.set_leverage(symbol=BinanceSymbol(symbol), leverage=args.leverage)
@@ -389,7 +392,6 @@ async def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
         except Exception as exc:  # pragma: no cover - exchange may report already-set state
             result["steps"].append(f"margin type {symbol} unchanged ({exc})")
 
-    await client.disconnect()
     return result
 
 
@@ -430,7 +432,6 @@ async def command_status(args: argparse.Namespace) -> dict[str, Any]:
         "kill_switch_reasons": kill_reasons,
         "kill_switch_triggered": bool(kill_reasons),
     }
-    await client.disconnect()
     return result
 
 
@@ -448,7 +449,6 @@ async def command_killswitch(args: argparse.Namespace) -> dict[str, Any]:
         "flattened_symbols": [],
     }
     if not trigger:
-        await client.disconnect()
         return result
 
     positions = await account_api.query_futures_position_risk(recv_window="5000")
@@ -479,7 +479,6 @@ async def command_killswitch(args: argparse.Namespace) -> dict[str, Any]:
         await account_api.cancel_all_open_orders(symbol=symbol, recv_window="5000")
 
     result["executed"] = True
-    await client.disconnect()
     return result
 
 

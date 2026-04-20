@@ -1,8 +1,8 @@
 {
-  "research_root": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1",
-  "selected_universe_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/selected_universe.json",
-  "catalog_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/followups/catalog/catalog_50",
-  "baseline_metrics_path": "/Users/lens/Desktop/ns-st/nautilus_trader/examples/backtest/crypto_rv/output/real_public_2026q1/real_backtest_metrics.json",
+  "research_root": "../output/real_public_2026q1",
+  "selected_universe_path": "../output/real_public_2026q1/selected_universe.json",
+  "catalog_path": "../output/real_public_2026q1/followups/catalog/catalog_50",
+  "baseline_metrics_path": "../output/real_public_2026q1/real_backtest_metrics.json",
   "top_n_candidates": 50,
   "output_json": "../output/real_public_2026q1/ctrend_q1_report.json",
   "output_md": "../output/real_public_2026q1/ctrend_q1_report.md",

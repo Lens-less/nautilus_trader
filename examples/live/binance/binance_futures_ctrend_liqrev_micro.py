@@ -57,10 +57,12 @@ try:
     from examples.live.binance.binance_futures_ctrend_liqrev_ops import build_namespace
     from examples.live.binance.binance_futures_ctrend_liqrev_ops import command_killswitch
     from examples.live.binance.binance_futures_ctrend_liqrev_ops import command_status
+    from examples.live.binance.binance_futures_ctrend_liqrev_ops import write_json_report
 except ImportError:  # pragma: no cover - script execution fallback
     from binance_futures_ctrend_liqrev_ops import build_namespace
     from binance_futures_ctrend_liqrev_ops import command_killswitch
     from binance_futures_ctrend_liqrev_ops import command_status
+    from binance_futures_ctrend_liqrev_ops import write_json_report
 
 
 try:
@@ -120,8 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-active-shorts",
         type=int,
-        default=3,
+        default=4,
         help="Fail-close threshold when conditioned shorts shrink below this count.",
+    )
+    parser.add_argument(
+        "--short-fallback-bands",
+        default="rank_1_30,rank_1_50",
+        help="Comma-separated short bands used when the primary post-rank-filter intersection is too small.",
     )
     parser.add_argument(
         "--history-lookback-days",
@@ -187,6 +194,21 @@ def build_rank_bands(top_candidates: list[str]) -> dict[str, list[str]]:
     }
 
 
+def parse_short_fallback_bands(raw_value: str, *, primary_short_band: str) -> tuple[str, ...]:
+    fallback_bands: list[str] = []
+    for raw_band in raw_value.split(","):
+        band_name = raw_band.strip()
+        if not band_name or band_name == primary_short_band:
+            continue
+        if band_name not in SHORT_BAND_CHOICES:
+            raise ValueError(
+                f"Unsupported fallback short band {band_name!r}; expected one of {SHORT_BAND_CHOICES}",
+            )
+        if band_name not in fallback_bands:
+            fallback_bands.append(band_name)
+    return tuple(fallback_bands)
+
+
 def parse_environment(value: str) -> BinanceEnvironment:
     if value == "demo":
         return BinanceEnvironment.DEMO
@@ -215,11 +237,17 @@ def build_ops_namespace(args: argparse.Namespace, *, command: str, force: bool =
     )
 
 
+def fetch_status_payload(status_args: argparse.Namespace) -> dict[str, object]:
+    status_payload = asyncio.run(command_status(status_args))
+    write_json_report(Path(status_args.output_json).resolve(), status_payload)
+    return status_payload
+
+
 def monitor_kill_switch(args: argparse.Namespace, stop_event: threading.Event) -> None:
     status_args = build_ops_namespace(args, command="status")
     kill_args = build_ops_namespace(args, command="killswitch")
     while not stop_event.wait(args.kill_switch_check_interval_secs):
-        status_payload = asyncio.run(command_status(status_args))
+        status_payload = fetch_status_payload(status_args)
         if not status_payload["dedicated_account_ready"]:
             os.kill(os.getpid(), signal.SIGINT)
             return
@@ -231,7 +259,8 @@ def monitor_kill_switch(args: argparse.Namespace, stop_event: threading.Event) -
 
 def main() -> None:
     args = build_parser().parse_args()
-    preflight_payload = asyncio.run(command_status(build_ops_namespace(args, command="status")))
+    status_namespace = build_ops_namespace(args, command="status")
+    preflight_payload = fetch_status_payload(status_namespace)
     if not preflight_payload["dedicated_account_ready"]:
         raise RuntimeError(
             "Refusing to start: unrelated non-zero Binance futures positions detected in the account",
@@ -243,12 +272,20 @@ def main() -> None:
     )
     rank_bands = build_rank_bands(top_candidates)
     eligible_short_ids = rank_bands[args.short_band]
+    fallback_short_band_names = parse_short_fallback_bands(
+        args.short_fallback_bands,
+        primary_short_band=args.short_band,
+    )
     universe_ids = baseline_longs + [
         instrument_id for instrument_id in top_candidates if instrument_id not in baseline_longs
     ]
     instrument_ids = tuple(InstrumentId.from_str(instrument_id) for instrument_id in universe_ids)
     eligible_short_instrument_ids = tuple(
         InstrumentId.from_str(instrument_id) for instrument_id in eligible_short_ids
+    )
+    fallback_short_instrument_ids = tuple(
+        tuple(InstrumentId.from_str(instrument_id) for instrument_id in rank_bands[band_name])
+        for band_name in fallback_short_band_names
     )
     raw_symbols = [instrument_id.split("-PERP.")[0] for instrument_id in universe_ids]
     bar_types = tuple(
@@ -321,6 +358,9 @@ def main() -> None:
         config=CryptoXSecTrendConditionalConfig(
             universe_instrument_ids=instrument_ids,
             eligible_short_instrument_ids=eligible_short_instrument_ids,
+            primary_short_band_name=args.short_band,
+            fallback_short_band_names=fallback_short_band_names,
+            fallback_short_instrument_ids=fallback_short_instrument_ids,
             external_order_claims=list(instrument_ids),
             bar_types=bar_types,
             leg_notional_usd=args.leg_notional_usd,
@@ -345,6 +385,7 @@ def main() -> None:
             order_time_in_force=TimeInForce.GTD,
             order_expire_seconds=args.order_expire_seconds,
             rebalance_execution_window_secs=3600.0,
+            retry_rebalance_after_target_expiry=True,
             min_order_notional_usd=5.0,
             manual_approval_rebalances=2,
             approval_artifact_dir=str(Path(__file__).resolve().parent / "runtime" / "approvals"),

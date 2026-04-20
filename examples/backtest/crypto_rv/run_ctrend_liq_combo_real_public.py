@@ -77,6 +77,22 @@ class ComboConfig:
     tilt_multiplier: float
     output_json: Path
     output_md: Path
+    optimization_variant_name: str
+    optimization_band_name: str
+    parity_min_active_shorts: int
+    experimental_min_active_shorts: int
+    experimental_fallback_band_names: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class ConditionedWeightPlan:
+    weights: dict[str, float]
+    longs: list[str]
+    shorts: list[str]
+    base_shorts: list[str]
+    selected_band_name: str | None
+    fallback_used: bool
+    flattened_due_to_min_shorts: bool
 
 
 class BinanceVisionFundingLoader:
@@ -178,10 +194,20 @@ def build_parser() -> argparse.ArgumentParser:
 def load_combo_config(path: Path) -> ComboConfig:
     payload = load_json(path)
     base_dir = path.parent
+    repo_root = Path(__file__).resolve().parents[3]
 
     def _resolve(value: str) -> Path:
         candidate = Path(value)
-        return candidate if candidate.is_absolute() else (base_dir / value).resolve()
+        if not candidate.is_absolute():
+            return (base_dir / value).resolve()
+        if candidate.exists():
+            return candidate
+        if "examples" in candidate.parts:
+            suffix = Path(*candidate.parts[candidate.parts.index("examples") :])
+            fallback = (repo_root / suffix).resolve()
+            if fallback.exists():
+                return fallback
+        return candidate
 
     return ComboConfig(
         real_public_config_path=_resolve(payload["real_public_config_path"]),
@@ -189,6 +215,24 @@ def load_combo_config(path: Path) -> ComboConfig:
         tilt_multiplier=float(payload.get("tilt_multiplier", 2.0)),
         output_json=_resolve(payload["output_json"]),
         output_md=_resolve(payload["output_md"]),
+        optimization_variant_name=str(
+            payload.get("optimization_trial", {}).get("variant_name", "vol-managed-biweekly-base"),
+        ),
+        optimization_band_name=str(
+            payload.get("optimization_trial", {}).get("band_name", "rank_1_20"),
+        ),
+        parity_min_active_shorts=int(
+            payload.get("optimization_trial", {}).get("parity_min_active_shorts", 3),
+        ),
+        experimental_min_active_shorts=int(
+            payload.get("optimization_trial", {}).get("experimental_min_active_shorts", 4),
+        ),
+        experimental_fallback_band_names=tuple(
+            payload.get("optimization_trial", {}).get(
+                "experimental_fallback_band_names",
+                ["rank_1_30", "rank_1_50"],
+            ),
+        ),
     )
 
 
@@ -376,16 +420,50 @@ def _apply_short_tilt(
     return weights
 
 
-def conditioned_short_weights(
+def _resolve_post_rank_filter_shorts(
+    *,
+    base_shorts: list[str],
+    band_name: str | None,
+    band_set: set[str],
+    min_active_shorts: int | None,
+    fallback_band_sequence: tuple[tuple[str, set[str]], ...],
+    flatten_on_breach: bool,
+) -> tuple[list[str], str | None, bool, bool]:
+    selected_shorts = [instrument_id for instrument_id in base_shorts if instrument_id in band_set]
+    selected_band_name = band_name
+    fallback_used = False
+    flattened_due_to_min_shorts = False
+
+    if min_active_shorts is None or len(selected_shorts) >= min_active_shorts:
+        return selected_shorts, selected_band_name, fallback_used, flattened_due_to_min_shorts
+
+    for fallback_band_name, fallback_band_set in fallback_band_sequence:
+        fallback_shorts = [
+            instrument_id for instrument_id in base_shorts if instrument_id in fallback_band_set
+        ]
+        if len(fallback_shorts) >= min_active_shorts:
+            return fallback_shorts, fallback_band_name, True, False
+
+    if flatten_on_breach:
+        return [], selected_band_name, False, True
+
+    return selected_shorts, selected_band_name, fallback_used, flattened_due_to_min_shorts
+
+
+def build_conditioned_weight_plan(
     composite_scores: dict[str, float],
     active_ids: list[str],
     *,
+    band_name: str | None,
     band_set: set[str],
     mode: str,
     long_bucket_frac: float,
     short_bucket_frac: float,
     tilt_multiplier: float,
-) -> dict[str, float]:
+    min_active_shorts: int | None = None,
+    fallback_band_sequence: tuple[tuple[str, set[str]], ...] = (),
+    flatten_on_breach: bool = False,
+) -> ConditionedWeightPlan:
     longs, base_shorts = _baseline_long_short_sets(
         composite_scores,
         long_bucket_frac=long_bucket_frac,
@@ -398,7 +476,15 @@ def conditioned_short_weights(
             weights[instrument_id] = long_weight
 
     if mode == "baseline":
-        return _apply_short_weights(weights, base_shorts)
+        return ConditionedWeightPlan(
+            weights=_apply_short_weights(weights, base_shorts),
+            longs=longs,
+            shorts=base_shorts,
+            base_shorts=base_shorts,
+            selected_band_name=band_name,
+            fallback_used=False,
+            flattened_due_to_min_shorts=False,
+        )
 
     eligible_band = [instrument_id for instrument_id in active_ids if instrument_id in band_set]
     ordered_all = [instrument_id for instrument_id, _ in sorted(composite_scores.items(), key=lambda item: (item[1], item[0]))]
@@ -406,21 +492,80 @@ def conditioned_short_weights(
 
     if mode == "hard_filter":
         selected_shorts = [instrument_id for instrument_id in ordered_all if instrument_id in eligible_band][:target_short_count]
-        return _apply_short_weights(weights, selected_shorts)
+        return ConditionedWeightPlan(
+            weights=_apply_short_weights(weights, selected_shorts),
+            longs=longs,
+            shorts=selected_shorts,
+            base_shorts=base_shorts,
+            selected_band_name=band_name,
+            fallback_used=False,
+            flattened_due_to_min_shorts=False,
+        )
 
     if mode == "post_rank_filter":
-        selected_shorts = [instrument_id for instrument_id in base_shorts if instrument_id in band_set]
-        return _apply_short_weights(weights, selected_shorts)
+        (
+            selected_shorts,
+            selected_band_name,
+            fallback_used,
+            flattened_due_to_min_shorts,
+        ) = _resolve_post_rank_filter_shorts(
+            base_shorts=base_shorts,
+            band_name=band_name,
+            band_set=band_set,
+            min_active_shorts=min_active_shorts,
+            fallback_band_sequence=fallback_band_sequence,
+            flatten_on_breach=flatten_on_breach,
+        )
+
+        return ConditionedWeightPlan(
+            weights=_apply_short_weights(weights, selected_shorts),
+            longs=longs,
+            shorts=selected_shorts,
+            base_shorts=base_shorts,
+            selected_band_name=selected_band_name,
+            fallback_used=fallback_used,
+            flattened_due_to_min_shorts=flattened_due_to_min_shorts,
+        )
 
     if mode == "short_tilt":
-        return _apply_short_tilt(
-            weights,
-            base_shorts,
-            band_set=band_set,
-            tilt_multiplier=tilt_multiplier,
+        return ConditionedWeightPlan(
+            weights=_apply_short_tilt(
+                weights,
+                base_shorts,
+                band_set=band_set,
+                tilt_multiplier=tilt_multiplier,
+            ),
+            longs=longs,
+            shorts=base_shorts,
+            base_shorts=base_shorts,
+            selected_band_name=band_name,
+            fallback_used=False,
+            flattened_due_to_min_shorts=False,
         )
 
     raise ValueError(f"Unsupported combo mode: {mode}")
+
+
+def conditioned_short_weights(
+    composite_scores: dict[str, float],
+    active_ids: list[str],
+    *,
+    band_set: set[str],
+    mode: str,
+    long_bucket_frac: float,
+    short_bucket_frac: float,
+    tilt_multiplier: float,
+) -> dict[str, float]:
+    return build_conditioned_weight_plan(
+        composite_scores,
+        active_ids,
+        band_name=None,
+        band_set=band_set,
+        mode=mode,
+        long_bucket_frac=long_bucket_frac,
+        short_bucket_frac=short_bucket_frac,
+        tilt_multiplier=tilt_multiplier,
+    ).weights
 
 
 def compound_total_return(period_returns: list[float]) -> float:
@@ -522,6 +667,10 @@ def simulate_combo_variant(
     tilt_multiplier: float,
     funding_loader: Any,
     legacy_metrics: dict[str, Any],
+    min_active_shorts: int | None = None,
+    fallback_band_sequence: tuple[tuple[str, set[str]], ...] = (),
+    flatten_on_breach: bool = False,
+    policy_name: str | None = None,
 ) -> dict[str, Any]:
     step = bars_per_rebalance(index, variant.rebalance_cadence)
     previous_weights = dict.fromkeys(universe_ids, 0.0)
@@ -529,6 +678,8 @@ def simulate_combo_variant(
     price_only_gross_returns: list[float] = []
     funding_aware_net_returns: list[float] = []
     funding_aware_gross_returns: list[float] = []
+    window_diagnostics: list[dict[str, Any]] = []
+    turnover_values: list[float] = []
 
     for signal_position, entry, end in iter_rebalance_windows(
         index,
@@ -559,20 +710,26 @@ def simulate_combo_variant(
             instrument_id: payload["composite_score"]
             for instrument_id, payload in score_payload.items()
         }
-        weights = conditioned_short_weights(
+        plan = build_conditioned_weight_plan(
             composite_scores,
             active_ids,
+            band_name=band_name,
             band_set=band_set,
             mode=mode,
             long_bucket_frac=runtime_config.portfolio.long_bucket_frac,
             short_bucket_frac=runtime_config.portfolio.short_bucket_frac,
             tilt_multiplier=tilt_multiplier,
+            min_active_shorts=min_active_shorts,
+            fallback_band_sequence=fallback_band_sequence,
+            flatten_on_breach=flatten_on_breach,
         )
+        weights = plan.weights
         period_returns = close_frame.iloc[end] / close_frame.iloc[entry] - 1.0
         turnover = sum(
             abs(weights.get(instrument_id, 0.0) - previous_weights.get(instrument_id, 0.0))
             for instrument_id in universe_ids
         )
+        turnover_values.append(turnover)
         previous_weights = {instrument_id: weights.get(instrument_id, 0.0) for instrument_id in universe_ids}
         period_days = (index[end] - index[entry]).total_seconds() / (24 * 60 * 60)
         metrics = compute_period_return(
@@ -596,6 +753,22 @@ def simulate_combo_variant(
         price_only_net_returns.append(metrics["net_return"])
         funding_aware_gross_returns.append(metrics["gross_return"] + funding_return)
         funding_aware_net_returns.append(metrics["net_return"] + funding_return)
+        window_diagnostics.append(
+            {
+                "signal_ts": str(index[signal_position]),
+                "entry_ts": str(index[entry]),
+                "end_ts": str(index[end]),
+                "base_short_count": len(plan.base_shorts),
+                "selected_short_count": len(plan.shorts),
+                "selected_band_name": plan.selected_band_name,
+                "fallback_used": plan.fallback_used,
+                "flattened_due_to_min_shorts": plan.flattened_due_to_min_shorts,
+                "turnover": turnover,
+                "price_only_net_return": metrics["net_return"],
+                "funding_return": funding_return,
+                "funding_aware_net_return": metrics["net_return"] + funding_return,
+            },
+        )
 
     if not price_only_net_returns:
         raise ValueError("CTREND combo runner did not produce any portfolio intervals")
@@ -618,17 +791,27 @@ def simulate_combo_variant(
     gross_return = funding_aware_gross_return
     max_drawdown_value = max_drawdown(funding_aware_net_returns)
     active_short_count = len([weight for weight in previous_weights.values() if weight < 0])
+    fallback_window_count = sum(1 for row in window_diagnostics if row["fallback_used"])
+    flattened_window_count = sum(1 for row in window_diagnostics if row["flattened_due_to_min_shorts"])
+    short_count_distribution: dict[str, int] = {}
+    for row in window_diagnostics:
+        key = str(row["selected_short_count"])
+        short_count_distribution[key] = short_count_distribution.get(key, 0) + 1
     legacy_variant_name = matched_legacy_baseline_variant(variant)
     legacy_variant_metrics = legacy_metrics["variants"][legacy_variant_name]
     legacy_engine_net_return = float(legacy_variant_metrics["total_return_pct"]) / 100.0
     legacy_engine_max_drawdown = float(legacy_variant_metrics["max_drawdown_pct"]) / 100.0
     return {
+        "policy_name": policy_name or "default",
         "variant_name": variant.name,
         "combo_mode": mode,
         "band_name": band_name,
         "rebalance_cadence": variant.rebalance_cadence,
         "cost_model_name": variant.cost_model_name,
         "volatility_managed": variant.volatility_managed,
+        "min_active_shorts": min_active_shorts,
+        "fallback_band_names": [name for name, _band in fallback_band_sequence],
+        "flatten_on_breach": flatten_on_breach,
         "gross_return": gross_return,
         "net_return": net_return,
         "max_drawdown": max_drawdown_value,
@@ -652,6 +835,50 @@ def simulate_combo_variant(
             baseline_max_drawdown=baseline_metrics["max_drawdown"],
         ),
         "active_short_count": active_short_count,
+        "fallback_window_count": fallback_window_count,
+        "flattened_window_count": flattened_window_count,
+        "total_turnover": sum(turnover_values),
+        "avg_turnover": (sum(turnover_values) / len(turnover_values)) if turnover_values else 0.0,
+        "short_count_distribution": short_count_distribution,
+        "window_diagnostics": window_diagnostics,
+    }
+
+
+def evaluate_optimization_candidate(
+    *,
+    parity_result: dict[str, Any],
+    experimental_result: dict[str, Any],
+) -> dict[str, Any]:
+    turnover_cap_multiple = 1.25
+    max_funding_lift_drop = 0.005
+    net_return_delta = experimental_result["net_return"] - parity_result["net_return"]
+    max_drawdown_delta = experimental_result["max_drawdown"] - parity_result["max_drawdown"]
+    turnover_ratio = (
+        experimental_result["total_turnover"] / parity_result["total_turnover"]
+        if parity_result["total_turnover"] > 0
+        else 1.0
+    )
+    funding_lift_delta = (
+        experimental_result["funding_return_lift"] - parity_result["funding_return_lift"]
+    )
+    credible = (
+        net_return_delta > 0.0
+        and max_drawdown_delta >= 0.0
+        and turnover_ratio <= turnover_cap_multiple
+        and funding_lift_delta >= -max_funding_lift_drop
+    )
+    return {
+        "credible_optimization_candidate": credible,
+        "decision_rule": {
+            "net_return_must_improve": True,
+            "max_drawdown_must_be_no_worse": True,
+            "turnover_cap_multiple_vs_parity": turnover_cap_multiple,
+            "max_funding_lift_drop_vs_parity": max_funding_lift_drop,
+        },
+        "net_return_delta": net_return_delta,
+        "max_drawdown_delta": max_drawdown_delta,
+        "turnover_ratio_vs_parity": turnover_ratio,
+        "funding_lift_delta": funding_lift_delta,
     }
 
 
@@ -714,6 +941,40 @@ def summarize_markdown(report_payload: dict[str, Any]) -> str:
                 "",
             ],
         )
+    lines.extend(
+        [
+            "## Optimization Trials",
+            "",
+        ],
+    )
+    for item in report_payload["optimization_trials"]:
+        lines.extend(
+            [
+                f"### {item['policy_name']}",
+                f"- Policy: `{item['variant_name']} | {item['combo_mode']} | {item['band_name']}`",
+                f"- Net return: {item['net_return']:.2%}",
+                f"- Max drawdown: {item['max_drawdown']:.2%}",
+                f"- Total turnover: {item['total_turnover']:.4f}",
+                f"- Funding lift: {item['funding_return_lift']:.2%}",
+                f"- Fallback windows: {item['fallback_window_count']}",
+                f"- Flattened windows: {item['flattened_window_count']}",
+                f"- Short-count distribution: {item['short_count_distribution']}",
+                "",
+            ],
+        )
+    optimization_summary = report_payload["optimization_summary"]
+    lines.extend(
+        [
+            "## Optimization Verdict",
+            "",
+            f"- Credible optimization candidate: `{optimization_summary['credible_optimization_candidate']}`",
+            f"- Net return delta vs parity: {optimization_summary['net_return_delta']:.2%}",
+            f"- Max drawdown delta vs parity: {optimization_summary['max_drawdown_delta']:.2%}",
+            f"- Turnover ratio vs parity: {optimization_summary['turnover_ratio_vs_parity']:.2f}x",
+            f"- Funding lift delta vs parity: {optimization_summary['funding_lift_delta']:.2%}",
+            "",
+        ],
+    )
     lines.extend(
         [
             "## Caveats",
@@ -801,6 +1062,72 @@ def main() -> None:
         reverse=True,
     )
     liq_report = load_json(config.liquidity_reversal_report_path)
+    optimization_variant = next(
+        variant for variant in variants if variant.name == config.optimization_variant_name
+    )
+    optimization_band_set = band_sets[config.optimization_band_name]
+    parity_result = simulate_combo_variant(
+        runtime_config=runtime_config,
+        close_frame=close_frame,
+        volume_frame=volume_frame,
+        index=close_frame.index,
+        universe_ids=list(close_frame.columns),
+        baseline_shorts=baseline_shorts,
+        signal_spec=real_public_config.signal,
+        variant=optimization_variant,
+        band_name=config.optimization_band_name,
+        band_set=optimization_band_set,
+        mode="post_rank_filter",
+        tilt_multiplier=config.tilt_multiplier,
+        funding_loader=funding_loader,
+        legacy_metrics=legacy_metrics,
+        min_active_shorts=config.parity_min_active_shorts,
+        flatten_on_breach=True,
+        policy_name="live_parity",
+    )
+    experimental_result = simulate_combo_variant(
+        runtime_config=runtime_config,
+        close_frame=close_frame,
+        volume_frame=volume_frame,
+        index=close_frame.index,
+        universe_ids=list(close_frame.columns),
+        baseline_shorts=baseline_shorts,
+        signal_spec=real_public_config.signal,
+        variant=optimization_variant,
+        band_name=config.optimization_band_name,
+        band_set=optimization_band_set,
+        mode="post_rank_filter",
+        tilt_multiplier=config.tilt_multiplier,
+        funding_loader=funding_loader,
+        legacy_metrics=legacy_metrics,
+        min_active_shorts=config.experimental_min_active_shorts,
+        fallback_band_sequence=tuple(
+            (name, band_sets[name]) for name in config.experimental_fallback_band_names
+        ),
+        flatten_on_breach=True,
+        policy_name="elastic_fallback",
+    )
+    baseline_result = simulate_combo_variant(
+        runtime_config=runtime_config,
+        close_frame=close_frame,
+        volume_frame=volume_frame,
+        index=close_frame.index,
+        universe_ids=list(close_frame.columns),
+        baseline_shorts=baseline_shorts,
+        signal_spec=real_public_config.signal,
+        variant=optimization_variant,
+        band_name=config.optimization_band_name,
+        band_set=optimization_band_set,
+        mode="post_rank_filter",
+        tilt_multiplier=config.tilt_multiplier,
+        funding_loader=funding_loader,
+        legacy_metrics=legacy_metrics,
+        policy_name="baseline_research",
+    )
+    optimization_summary = evaluate_optimization_candidate(
+        parity_result=parity_result,
+        experimental_result=experimental_result,
+    )
     funding_overlay_status = (
         "complete"
         if coverage.loaded_month_count == coverage.requested_month_count
@@ -844,6 +1171,12 @@ def main() -> None:
         "top_combos": top_combos,
         "focus_post_rank_results": focus_post_rank_results,
         "all_results": results,
+        "optimization_trials": [
+            baseline_result,
+            parity_result,
+            experimental_result,
+        ],
+        "optimization_summary": optimization_summary,
         "liquidity_reversal_context": {
             "winner": liq_report["winner"],
             "winner_proxy_stress_return_pct": liq_report["winner_metrics"]["proxy_stress_return_pct"],

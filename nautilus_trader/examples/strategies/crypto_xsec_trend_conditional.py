@@ -67,6 +67,8 @@ class ConditionalWeightPlan:
     weights: dict[str, float]
     longs: list[str]
     shorts: list[str]
+    selected_short_band_name: str | None = None
+    fallback_used: bool = False
 
 
 def conditioned_plan_tradeable(plan: ConditionalWeightPlan, min_active_shorts: int) -> bool:
@@ -100,11 +102,38 @@ def _apply_short_tilt(
     return weights
 
 
+def _resolve_post_rank_filter_shorts(
+    *,
+    base_shorts: list[str],
+    primary_short_band_name: str | None,
+    eligible_short_ids: set[str],
+    fallback_short_bands: tuple[tuple[str, set[str]], ...],
+    min_active_shorts: int | None,
+) -> tuple[list[str], str | None, bool]:
+    selected_shorts = [
+        instrument_id for instrument_id in base_shorts if instrument_id in eligible_short_ids
+    ]
+    if min_active_shorts is None or len(selected_shorts) >= min_active_shorts:
+        return selected_shorts, primary_short_band_name, False
+
+    for fallback_band_name, fallback_band_ids in fallback_short_bands:
+        fallback_shorts = [
+            instrument_id for instrument_id in base_shorts if instrument_id in fallback_band_ids
+        ]
+        if len(fallback_shorts) >= min_active_shorts:
+            return fallback_shorts, fallback_band_name, True
+
+    return selected_shorts, primary_short_band_name, False
+
+
 def build_conditioned_weight_plan(
     composite_scores: dict[str, float],
     active_ids: list[str],
     *,
     eligible_short_ids: set[str],
+    primary_short_band_name: str | None = None,
+    fallback_short_bands: tuple[tuple[str, set[str]], ...] = (),
+    min_active_shorts: int | None = None,
     mode: ConditionalMode,
     long_bucket_frac: float,
     short_bucket_frac: float,
@@ -126,6 +155,7 @@ def build_conditioned_weight_plan(
             weights=_apply_short_weights(weights, base_shorts),
             longs=longs,
             shorts=base_shorts,
+            selected_short_band_name=primary_short_band_name,
         )
 
     ordered_all = [
@@ -147,16 +177,23 @@ def build_conditioned_weight_plan(
             weights=_apply_short_weights(weights, selected_shorts),
             longs=longs,
             shorts=selected_shorts,
+            selected_short_band_name=primary_short_band_name,
         )
 
     if mode == "post_rank_filter":
-        selected_shorts = [
-            instrument_id for instrument_id in base_shorts if instrument_id in eligible_short_ids
-        ]
+        selected_shorts, selected_short_band_name, fallback_used = _resolve_post_rank_filter_shorts(
+            base_shorts=base_shorts,
+            primary_short_band_name=primary_short_band_name,
+            eligible_short_ids=eligible_short_ids,
+            fallback_short_bands=fallback_short_bands,
+            min_active_shorts=min_active_shorts,
+        )
         return ConditionalWeightPlan(
             weights=_apply_short_weights(weights, selected_shorts),
             longs=longs,
             shorts=selected_shorts,
+            selected_short_band_name=selected_short_band_name,
+            fallback_used=fallback_used,
         )
 
     if mode == "short_tilt":
@@ -169,6 +206,7 @@ def build_conditioned_weight_plan(
             ),
             longs=longs,
             shorts=base_shorts,
+            selected_short_band_name=primary_short_band_name,
         )
 
     raise ValueError(f"Unsupported conditional mode: {mode}")
@@ -183,6 +221,9 @@ class CryptoXSecTrendConditionalConfig(StrategyConfig, frozen=True):
     eligible_short_instrument_ids: tuple[InstrumentId, ...]
     bar_types: tuple[Any, ...]
     leg_notional_usd: PositiveFloat
+    primary_short_band_name: str = "rank_1_20"
+    fallback_short_band_names: tuple[str, ...] = ()
+    fallback_short_instrument_ids: tuple[tuple[InstrumentId, ...], ...] = ()
     rebalance_cadence: RebalanceCadence = "weekly"
     long_bucket_frac: PositiveFloat = 0.2
     short_bucket_frac: PositiveFloat = 0.2
@@ -204,6 +245,7 @@ class CryptoXSecTrendConditionalConfig(StrategyConfig, frozen=True):
     order_time_in_force: TimeInForce = TimeInForce.GTD
     order_expire_seconds: PositiveFloat = 900.0
     rebalance_execution_window_secs: PositiveFloat = 3600.0
+    retry_rebalance_after_target_expiry: bool = True
     min_order_notional_usd: PositiveFloat = 5.0
     manual_approval_rebalances: int = 2
     approval_artifact_dir: str | None = None
@@ -221,6 +263,13 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
 
         self._bar_types = self._build_bar_type_index(config.bar_types)
         self._eligible_short_ids = set(config.eligible_short_instrument_ids)
+        self._fallback_short_bands = tuple(
+            (
+                config.fallback_short_band_names[index],
+                {str(instrument_id) for instrument_id in fallback_ids},
+            )
+            for index, fallback_ids in enumerate(config.fallback_short_instrument_ids)
+        )
         self._instruments: dict[InstrumentId, Instrument] = {}
         self._latest_bars: dict[InstrumentId, Bar] = {}
         self._latest_quotes: dict[InstrumentId, QuoteTick] = {}
@@ -229,9 +278,11 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         self._target_quantities: dict[InstrumentId, Decimal] = {}
         self._pending_approval_targets: dict[InstrumentId, Decimal] = {}
         self._pending_approval_preview_path: Path | None = None
+        self._last_snapshot_diagnostic_key: tuple[int, tuple[int, ...], int, int] | None = None
         self._last_rebalance_ts: int | None = None
         self._rebalance_count = 0
         self._execution_deadline_ns: int | None = None
+        self._approval_retry_bypass_active = False
         self._rebalance_interval_ns = self._cadence_to_ns(config.rebalance_cadence)
         self._signal_spec = TrendSignalSpec(
             fast_window=config.fast_window,
@@ -257,9 +308,18 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
             "eligible_short_instrument_ids must not be empty",
         )
         PyCondition.is_true(
+            len(config.fallback_short_band_names) == len(config.fallback_short_instrument_ids),
+            "fallback short bands and instrument-id groups must have matching lengths",
+        )
+        PyCondition.is_true(
             set(config.eligible_short_instrument_ids).issubset(set(config.universe_instrument_ids)),
             "eligible_short_instrument_ids must be a subset of universe_instrument_ids",
         )
+        for fallback_ids in config.fallback_short_instrument_ids:
+            PyCondition.is_true(
+                set(fallback_ids).issubset(set(config.universe_instrument_ids)),
+                "fallback short instrument IDs must be a subset of universe_instrument_ids",
+            )
         PyCondition.is_true(
             len(config.universe_instrument_ids) == len(set(config.universe_instrument_ids)),
             "duplicate universe instrument IDs are not allowed",
@@ -310,6 +370,7 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
             "Started CryptoXSecTrendConditionalStrategy "
             f"with {len(self.config.universe_instrument_ids)} instruments, "
             f"eligible_shorts={len(self.config.eligible_short_instrument_ids)}, "
+            f"fallback_bands={self.config.fallback_short_band_names}, "
             f"cadence={self.config.rebalance_cadence}, "
             f"conditional_mode={self.config.conditional_mode}, "
             f"min_active_shorts={self.config.min_active_shorts}",
@@ -317,12 +378,15 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
 
     def on_historical_data(self, data: Any) -> None:
         if isinstance(data, Bar) and data.bar_type.instrument_id in self._close_history:
+            self._latest_bars[data.bar_type.instrument_id] = data
             self._ingest_bar(data)
+            self._maybe_rebalance_from_latest_snapshot()
 
     def on_quote_tick(self, tick: QuoteTick) -> None:
         if tick.instrument_id in self._instruments:
             self._latest_quotes[tick.instrument_id] = tick
             self._try_execute_pending_approval()
+            self._maybe_rebalance_from_latest_snapshot()
             self._work_pending_target(tick.instrument_id)
 
     def on_bar(self, bar: Bar) -> None:
@@ -333,12 +397,10 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         self._latest_bars[instrument_id] = bar
         self._ingest_bar(bar)
 
-        if self._last_rebalance_ts is not None:
-            elapsed_ns = bar.ts_event - self._last_rebalance_ts
-            if elapsed_ns < self._rebalance_interval_ns:
-                return
+        if self._latest_complete_snapshot_ts() != bar.ts_event:
+            return
 
-        if not self._has_signal_ready_snapshot(bar.ts_event):
+        if not self._rebalance_due(bar.ts_event):
             return
 
         self._rebalance(bar.ts_event)
@@ -383,11 +445,90 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
     def _has_signal_ready_snapshot(self, ts_event: int) -> bool:
         return len(self._active_signal_ids(ts_event)) == len(self.config.universe_instrument_ids)
 
+    def _latest_complete_snapshot_ts(self) -> int | None:
+        if len(self._latest_bars) != len(self.config.universe_instrument_ids):
+            return None
+
+        ts_values: set[int] = set()
+        for instrument_id in self.config.universe_instrument_ids:
+            bar = self._latest_bars.get(instrument_id)
+            if bar is None:
+                return None
+            if bar.close.as_decimal() <= 0:
+                return None
+            if len(self._close_history[instrument_id]) < self.config.min_history_bars:
+                return None
+            ts_values.add(bar.ts_event)
+
+        if len(ts_values) != 1:
+            return None
+
+        return next(iter(ts_values))
+
+    def _snapshot_diagnostic_payload(self) -> tuple[tuple[int, tuple[int, ...], int, int], str]:
+        latest_bars_count = len(self._latest_bars)
+        if latest_bars_count != len(self.config.universe_instrument_ids):
+            key = (latest_bars_count, (), 0, 0)
+            return key, (
+                "latest_bars "
+                f"{latest_bars_count}/{len(self.config.universe_instrument_ids)}"
+            )
+
+        ts_values: set[int] = set()
+        insufficient_history = 0
+        nonpositive_close = 0
+        for instrument_id in self.config.universe_instrument_ids:
+            bar = self._latest_bars.get(instrument_id)
+            if bar is None:
+                continue
+            ts_values.add(bar.ts_event)
+            if bar.close.as_decimal() <= 0:
+                nonpositive_close += 1
+            if len(self._close_history[instrument_id]) < self.config.min_history_bars:
+                insufficient_history += 1
+
+        ts_tuple = tuple(sorted(ts_values))
+        key = (latest_bars_count, ts_tuple, insufficient_history, nonpositive_close)
+        return key, (
+            "latest_bars "
+            f"{latest_bars_count}/{len(self.config.universe_instrument_ids)}, "
+            f"unique_ts={len(ts_tuple)}, "
+            f"insufficient_history={insufficient_history}, "
+            f"nonpositive_close={nonpositive_close}"
+        )
+
+    def _rebalance_due(self, ts_event: int) -> bool:
+        if self._last_rebalance_ts is None:
+            return True
+        return ts_event - self._last_rebalance_ts >= self._rebalance_interval_ns
+
+    def _maybe_rebalance_from_latest_snapshot(self) -> None:
+        if self._pending_approval_targets or self._target_quantities:
+            return
+
+        snapshot_ts = self._latest_complete_snapshot_ts()
+        if snapshot_ts is None:
+            key, message = self._snapshot_diagnostic_payload()
+            if self._last_snapshot_diagnostic_key != key:
+                self._last_snapshot_diagnostic_key = key
+                self.log.warning(f"Snapshot not ready for rebalance: {message}")
+            return
+        if not self._rebalance_due(snapshot_ts):
+            return
+
+        self._last_snapshot_diagnostic_key = None
+
+        self.log.info(
+            "Triggering rebalance from latest synchronized snapshot "
+            f"ts_event={snapshot_ts}",
+        )
+        self._rebalance(snapshot_ts)
+
     def _active_signal_ids(self, ts_event: int) -> list[InstrumentId]:
         active_ids: list[InstrumentId] = []
         for instrument_id in self.config.universe_instrument_ids:
             bar = self._latest_bars.get(instrument_id)
-            if bar is None or bar.ts_event != ts_event or bar.is_single_price():
+            if bar is None or bar.ts_event != ts_event:
                 continue
             if bar.close.as_decimal() <= 0:
                 continue
@@ -421,6 +562,9 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
             },
             [str(instrument_id) for instrument_id in active_ids],
             eligible_short_ids={str(instrument_id) for instrument_id in self._eligible_short_ids},
+            primary_short_band_name=self.config.primary_short_band_name,
+            fallback_short_bands=self._fallback_short_bands,
+            min_active_shorts=self.config.min_active_shorts,
             mode=self.config.conditional_mode,
             long_bucket_frac=self.config.long_bucket_frac,
             short_bucket_frac=self.config.short_bucket_frac,
@@ -461,10 +605,13 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         self.log.info(
             "Rebalanced crypto conditional trend basket "
             f"#{self._rebalance_count}: longs={len(plan.longs)} shorts={len(plan.shorts)} "
+            f"short_band={plan.selected_short_band_name} fallback_used={plan.fallback_used} "
             f"submitted_orders={len(targets)}",
         )
 
     def _approval_required(self, ts_event: int) -> bool:
+        if self._approval_retry_bypass_active:
+            return False
         return (
             self.config.approval_artifact_dir is not None
             and self._rebalance_count < self.config.manual_approval_rebalances
@@ -497,6 +644,8 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
             "rebalance_number": self._rebalance_count + 1,
             "conditional_mode": self.config.conditional_mode,
             "eligible_short_count": len(self.config.eligible_short_instrument_ids),
+            "selected_short_band_name": plan.selected_short_band_name,
+            "fallback_used": plan.fallback_used,
             "longs": plan.longs,
             "shorts": plan.shorts,
             "targets": {str(instrument_id): str(quantity) for instrument_id, quantity in targets.items()},
@@ -530,6 +679,7 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         targets: dict[InstrumentId, Decimal],
     ) -> None:
         self._cancel_all_open_orders()
+        self._approval_retry_bypass_active = False
         self._target_quantities = dict(targets)
         self._execution_deadline_ns = self.clock.timestamp_ns() + int(
             self.config.rebalance_execution_window_secs * 1_000_000_000,
@@ -570,10 +720,7 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         if instrument_id not in self._target_quantities:
             return False
         if self._execution_deadline_ns is not None and self.clock.timestamp_ns() > self._execution_deadline_ns:
-            self.log.warning(
-                f"Execution window expired for {instrument_id}; leaving target unresolved until next rebalance",
-            )
-            self._target_quantities.pop(instrument_id, None)
+            self._handle_execution_window_expiry()
             return False
         if self._has_resting_orders(instrument_id):
             return False
@@ -589,6 +736,32 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
         if not submitted and not self.config.allow_market_fallback:
             return False
         return submitted
+
+    def _handle_execution_window_expiry(self) -> None:
+        unresolved_target_count = len(self._target_quantities)
+        if unresolved_target_count == 0:
+            return
+
+        self._cancel_all_open_orders()
+        self._target_quantities = {}
+        self._execution_deadline_ns = None
+
+        if self.config.retry_rebalance_after_target_expiry:
+            self._last_rebalance_ts = None
+            self._approval_retry_bypass_active = True
+            self.log.warning(
+                "Execution window expired with "
+                f"{unresolved_target_count} unresolved targets; scheduling a fresh rebalance retry",
+            )
+            snapshot_ts = self._latest_complete_snapshot_ts()
+            if snapshot_ts is not None:
+                self._rebalance(snapshot_ts)
+            return
+
+        self.log.warning(
+            "Execution window expired with "
+            f"{unresolved_target_count} unresolved targets; leaving portfolio unchanged until the next cadence",
+        )
 
     def _submit_delta_order(self, instrument_id: InstrumentId, target_quantity: Decimal) -> bool:
         current_quantity = Decimal(self.portfolio.net_position(instrument_id))

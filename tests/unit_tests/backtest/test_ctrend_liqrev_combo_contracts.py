@@ -7,11 +7,17 @@ import pandas as pd
 import pytest
 
 from examples.backtest.crypto_rv.run_ctrend_backtest import VariantSpec
+from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import (
+    build_conditioned_weight_plan,
+)
 from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import build_rank_bands
 from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import (
     compute_combo_baseline_metrics,
 )
 from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import conditioned_short_weights
+from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import (
+    evaluate_optimization_candidate,
+)
 from examples.backtest.crypto_rv.run_ctrend_liq_combo_real_public import (
     matched_legacy_baseline_variant,
 )
@@ -113,6 +119,69 @@ def test_short_tilt_overweights_target_band_and_preserves_short_gross() -> None:
     assert abs(weights["SHORT_4"]) > abs(weights["SHORT_3"])
 
 
+def test_post_rank_filter_falls_back_to_wider_band_when_threshold_not_met() -> None:
+    composite_scores = {
+        "LONG_A": 0.8,
+        "LONG_B": 0.7,
+        "SHORT_1": -0.1,
+        "SHORT_2": -0.2,
+        "SHORT_3": -0.3,
+        "SHORT_4": -0.4,
+    }
+
+    plan = build_conditioned_weight_plan(
+        composite_scores,
+        list(composite_scores),
+        band_name="rank_1_20",
+        band_set={"SHORT_4"},
+        mode="post_rank_filter",
+        long_bucket_frac=0.25,
+        short_bucket_frac=0.5,
+        tilt_multiplier=2.0,
+        min_active_shorts=2,
+        fallback_band_sequence=(("rank_1_30", {"SHORT_3", "SHORT_4"}),),
+        flatten_on_breach=True,
+    )
+
+    assert plan.selected_band_name == "rank_1_30"
+    assert plan.fallback_used is True
+    assert plan.flattened_due_to_min_shorts is False
+    assert plan.shorts == ["SHORT_4", "SHORT_3"]
+    assert plan.weights["SHORT_4"] < 0.0
+    assert plan.weights["SHORT_3"] < 0.0
+
+
+def test_post_rank_filter_flattens_when_no_band_meets_threshold() -> None:
+    composite_scores = {
+        "LONG_A": 0.8,
+        "LONG_B": 0.7,
+        "SHORT_1": -0.1,
+        "SHORT_2": -0.2,
+        "SHORT_3": -0.3,
+        "SHORT_4": -0.4,
+    }
+
+    plan = build_conditioned_weight_plan(
+        composite_scores,
+        list(composite_scores),
+        band_name="rank_1_20",
+        band_set={"SHORT_4"},
+        mode="post_rank_filter",
+        long_bucket_frac=0.25,
+        short_bucket_frac=0.5,
+        tilt_multiplier=2.0,
+        min_active_shorts=3,
+        fallback_band_sequence=(("rank_1_30", {"SHORT_3", "SHORT_4"}),),
+        flatten_on_breach=True,
+    )
+
+    assert plan.selected_band_name == "rank_1_20"
+    assert plan.fallback_used is False
+    assert plan.flattened_due_to_min_shorts is True
+    assert plan.shorts == []
+    assert all(weight >= 0.0 for instrument_id, weight in plan.weights.items() if instrument_id.startswith("SHORT_"))
+
+
 @dataclass
 class StubFundingLoader:
     rate_sums: dict[str, float]
@@ -145,6 +214,42 @@ def test_period_funding_return_applies_long_short_signs_without_touching_signal_
     )
 
     assert abs(funding_return - 0.00125) < 1e-12
+
+
+def test_evaluate_optimization_candidate_requires_all_guardrails() -> None:
+    summary = evaluate_optimization_candidate(
+        parity_result={
+            "net_return": 0.20,
+            "max_drawdown": -0.05,
+            "total_turnover": 1.0,
+            "funding_return_lift": 0.02,
+        },
+        experimental_result={
+            "net_return": 0.21,
+            "max_drawdown": -0.04,
+            "total_turnover": 1.2,
+            "funding_return_lift": 0.018,
+        },
+    )
+
+    assert summary["credible_optimization_candidate"] is True
+
+    rejected = evaluate_optimization_candidate(
+        parity_result={
+            "net_return": 0.20,
+            "max_drawdown": -0.05,
+            "total_turnover": 1.0,
+            "funding_return_lift": 0.02,
+        },
+        experimental_result={
+            "net_return": 0.205,
+            "max_drawdown": -0.06,
+            "total_turnover": 1.3,
+            "funding_return_lift": 0.01,
+        },
+    )
+
+    assert rejected["credible_optimization_candidate"] is False
 
 
 def test_matched_legacy_baseline_variant_uses_cost_and_cadence() -> None:

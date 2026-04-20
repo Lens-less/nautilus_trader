@@ -1,7 +1,17 @@
 {
-  "real_public_config_path": "/Users/lens/Desktop/ns-st/worktrees/nt-xsec-03-vol-trend/examples/backtest/crypto_rv/configs/ctrend.real_public_q1.json",
-  "liquidity_reversal_report_path": "/Users/lens/Desktop/ns-st/worktrees/nt-xsec-01-liq-reversal/examples/backtest/crypto_rv/output/liquidity_reversal_pilot/liquidity_reversal_report.json",
+  "real_public_config_path": "./ctrend.real_public_q1.json",
+  "liquidity_reversal_report_path": "../../../../../nt-xsec-01-liq-reversal/examples/backtest/crypto_rv/output/liquidity_reversal_pilot/liquidity_reversal_report.json",
   "tilt_multiplier": 2.0,
+  "optimization_trial": {
+    "variant_name": "vol-managed-biweekly-base",
+    "band_name": "rank_1_20",
+    "parity_min_active_shorts": 3,
+    "experimental_min_active_shorts": 4,
+    "experimental_fallback_band_names": [
+      "rank_1_30",
+      "rank_1_50"
+    ]
+  },
   "output_json": "../output/real_public_2026q1/ctrend_liq_combo_q1_report.json",
   "output_md": "../output/real_public_2026q1/ctrend_liq_combo_q1_report.md"
 }
