@@ -378,3 +378,47 @@ def test_approval_required_bypasses_manual_gate_for_expiry_retry(
     )
 
     assert strategy._approval_required(124) is False
+
+
+def test_submit_delta_order_drops_untradeable_zero_quantity_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = CryptoXSecTrendConditionalStrategy.__new__(CryptoXSecTrendConditionalStrategy)
+    strategy._instruments = {
+        "BTC": SimpleNamespace(
+            multiplier=SimpleNamespace(as_decimal=lambda: Decimal(1)),
+            make_qty=lambda value, round_down=True: SimpleNamespace(as_decimal=lambda: Decimal(0)),
+        ),
+    }
+    strategy._latest_bars = {
+        "BTC": SimpleNamespace(close=SimpleNamespace(as_decimal=lambda: Decimal(41000))),
+    }
+    strategy._target_quantities = {"BTC": Decimal("0.00009")}
+
+    monkeypatch.setattr(
+        CryptoXSecTrendConditionalStrategy,
+        "portfolio",
+        property(lambda self: SimpleNamespace(net_position=lambda instrument_id: Decimal(0))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        CryptoXSecTrendConditionalStrategy,
+        "config",
+        property(
+            lambda self: SimpleNamespace(
+                min_order_notional_usd=5.0,
+                use_passive_limits=False,
+                allow_market_fallback=False,
+            ),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        CryptoXSecTrendConditionalStrategy,
+        "log",
+        property(lambda self: SimpleNamespace(warning=lambda *args, **kwargs: None)),
+        raising=False,
+    )
+
+    assert strategy._submit_delta_order("BTC", Decimal("0.00009")) is False
+    assert strategy._target_quantities == {}

@@ -777,8 +777,21 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
 
         price = Decimal(bar.close.as_decimal())
         multiplier = Decimal(instrument.multiplier.as_decimal())
-        delta_notional = abs(delta_quantity) * price * multiplier
+        quantity = instrument.make_qty(abs(delta_quantity), round_down=True)
+        if quantity.as_decimal() <= 0:
+            self.log.warning(
+                f"Skipping order for {instrument_id}: target quantity rounds to zero at current size increment",
+            )
+            self._target_quantities.pop(instrument_id, None)
+            return False
+
+        delta_notional = quantity.as_decimal() * price * multiplier
         if delta_notional < Decimal(str(self.config.min_order_notional_usd)):
+            self.log.warning(
+                f"Skipping order for {instrument_id}: rounded order notional {delta_notional} "
+                f"is below minimum {self.config.min_order_notional_usd}",
+            )
+            self._target_quantities.pop(instrument_id, None)
             return False
 
         if self.config.use_passive_limits:
@@ -796,10 +809,6 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
                 return False
 
         order_side = OrderSide.BUY if delta_quantity > 0 else OrderSide.SELL
-        quantity = instrument.make_qty(abs(delta_quantity), round_down=True)
-        if quantity.as_decimal() <= 0:
-            return False
-
         market_order: MarketOrder = self.order_factory.market(
             instrument_id=instrument_id,
             order_side=order_side,
