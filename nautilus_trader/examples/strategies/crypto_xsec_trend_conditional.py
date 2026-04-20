@@ -777,7 +777,14 @@ class CryptoXSecTrendConditionalStrategy(Strategy):
 
         price = Decimal(bar.close.as_decimal())
         multiplier = Decimal(instrument.multiplier.as_decimal())
-        quantity = instrument.make_qty(abs(delta_quantity), round_down=True)
+        try:
+            quantity = instrument.make_qty(abs(delta_quantity), round_down=True)
+        except ValueError:
+            self.log.warning(
+                f"Skipping order for {instrument_id}: target quantity is below the instrument size increment",
+            )
+            self._target_quantities.pop(instrument_id, None)
+            return False
         if quantity.as_decimal() <= 0:
             self.log.warning(
                 f"Skipping order for {instrument_id}: target quantity rounds to zero at current size increment",
